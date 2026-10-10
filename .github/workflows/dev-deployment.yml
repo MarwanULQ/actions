@@ -54,3 +54,51 @@ jobs:
         run: |
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/my-app:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${IMAGE_TAG}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Copy Compose file to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "$EC2_USER@$EC2_HOST" \
+            'mkdir -p ~/my-app'
+
+          scp -i ~/.ssh/deploy_key \
+            compose.yaml \
+            "$EC2_USER@$EC2_HOST:my-app/compose.yaml"
+
+      - name: Deploy on EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${IMAGE_TAG:0:7}"
+
+          ssh -i ~/.ssh/deploy_key \
+            "$EC2_USER@$EC2_HOST" \
+             export DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' &&
+             export IMAGE_TAG='$SHORT_SHA' &&
+             docker compose pull &&
+             docker compose up -d --remove-orphans"
